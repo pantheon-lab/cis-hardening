@@ -1,0 +1,5 @@
+# Runtime output from the hardening scripts
+*.log
+/logs/
+/backups/
+.DS_Store
