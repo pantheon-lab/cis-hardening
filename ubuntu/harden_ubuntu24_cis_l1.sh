@@ -714,17 +714,37 @@ fix_faillock() {
   # supported mechanism on Debian/Ubuntu; left as a manual step if no profile is registered).
   log INFO "faillock.conf updated — verify pam_faillock is enabled via 'pam-auth-update' if not already."
 }
+PWHISTORY_CONF_FILE="/etc/pam.d/common-password"
+# ensure_pwhistory_line — insert a pam_pwhistory.so password line if the
+# stack doesn't have one at all. Stock Debian/Ubuntu don't ship a
+# pam-auth-update "pwhistory" profile, so there's no safer/declarative way
+# to enable this — CIS's own remediation for this control is to edit
+# common-password directly, which is what this does. Placed immediately
+# before the pam_unix.so password line (order matters: pwhistory must run
+# before pam_unix.so so pam_unix.so can reuse the already-typed password
+# via use_authtok). Safe to call repeatedly — a no-op once the line exists.
+ensure_pwhistory_line() {
+  local f="$PWHISTORY_CONF_FILE"
+  [[ -f "$f" ]] || return 1
+  grep -Eq '^\s*password\s+.*pam_pwhistory\.so' "$f" && return 0
+  backup_file "$f"
+  if grep -Eq '^[[:space:]]*password[[:space:]]+.*pam_unix\.so' "$f"; then
+    sed -i -E '0,/^([[:space:]]*password[[:space:]]+.*pam_unix\.so.*)$/s//password requisite pam_pwhistory.so remember=5 use_authtok enforce_for_root\n\1/' "$f"
+  else
+    echo 'password requisite pam_pwhistory.so remember=5 use_authtok enforce_for_root' >> "$f"
+  fi
+  log INFO "Inserted pam_pwhistory.so into $f. If you later run 'pam-auth-update' for an unrelated PAM profile change, verify this line survived it."
+}
 check_pwhistory() {
   grep -Erq '^\s*password\s+.*pam_pwhistory\.so.*remember=([5-9]|[1-9][0-9])' /etc/pam.d/common-password 2>/dev/null
 }
 fix_pwhistory() {
   local f="/etc/pam.d/common-password"
-  backup_file "$f"
-  if grep -Eq '^\s*password\s+.*pam_pwhistory\.so' "$f"; then
+  if grep -Eq '^\s*password\s+.*pam_pwhistory\.so' "$f" 2>/dev/null; then
+    backup_file "$f"
     sed -i -E 's/^(\s*password\s+.*pam_pwhistory\.so.*)remember=[0-9]+/\1remember=5/' "$f"
   else
-    log INFO "pam_pwhistory.so not found in $f — add it manually via pam-auth-update or your PAM profile."
-    return 1
+    ensure_pwhistory_line
   fi
 }
 check_faillock_root() {
@@ -745,13 +765,12 @@ check_pwhistory_root() {
 }
 fix_pwhistory_root() {
   local f="/etc/pam.d/common-password"
-  backup_file "$f"
-  if grep -Eq '^\s*password\s+.*pam_pwhistory\.so' "$f"; then
+  if grep -Eq '^\s*password\s+.*pam_pwhistory\.so' "$f" 2>/dev/null; then
+    backup_file "$f"
     grep -Eq '^\s*password\s+.*pam_pwhistory\.so.*enforce_for_root' "$f" || \
       sed -i -E 's|^(\s*password\s+.*pam_pwhistory\.so.*)$|\1 enforce_for_root|' "$f"
   else
-    log INFO "pam_pwhistory.so not found in $f — add it manually via pam-auth-update or your PAM profile."
-    return 1
+    ensure_pwhistory_line
   fi
 }
 check_pwhistory_use_authtok() {
@@ -759,12 +778,12 @@ check_pwhistory_use_authtok() {
 }
 fix_pwhistory_use_authtok() {
   local f="/etc/pam.d/common-password"
-  backup_file "$f"
-  if grep -Eq '^\s*password\s+.*pam_pwhistory\.so' "$f"; then
+  if grep -Eq '^\s*password\s+.*pam_pwhistory\.so' "$f" 2>/dev/null; then
+    backup_file "$f"
     grep -Eq '^\s*password\s+.*pam_pwhistory\.so.*use_authtok' "$f" || \
       sed -i -E 's|^(\s*password\s+.*pam_pwhistory\.so.*)$|\1 use_authtok|' "$f"
   else
-    return 1
+    ensure_pwhistory_line
   fi
 }
 check_pam_unix_nullok() {

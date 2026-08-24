@@ -124,10 +124,16 @@ to run alongside those workloads.
   user running `sudo ./harden...sh` is already a member of the `sudo`
   group — otherwise it's skipped with a log message, so you can't
   accidentally lock yourself out of `su`.
-- `PAM.faillock`/`PAM.remember*` only edit the relevant `.conf` files; wiring
-  `pam_faillock`/`pam_pwhistory` into `/etc/pam.d/common-auth` if they aren't
-  already there is left as a manual step via `pam-auth-update`, so the
-  script doesn't silently rewrite your PAM stack structure.
+- `PAM.faillock`/`PAM.faillock_root` only edit `faillock.conf`; wiring
+  `pam_faillock` into `/etc/pam.d/common-auth` if it isn't already there is
+  left as a manual step via `pam-auth-update`.
+- `PAM.remember`/`PAM.remember_root`/`PAM.pwhistory_use_authtok`, by
+  contrast, **do** insert a `pam_pwhistory.so` line into
+  `/etc/pam.d/common-password` if one isn't already present (immediately
+  before the `pam_unix.so` line, matching CIS's own remediation) — stock
+  Debian/Ubuntu don't ship a `pam-auth-update` profile for it, so there's
+  no more declarative way to enable it. If you later run `pam-auth-update`
+  for an unrelated PAM profile change, double-check this line survived it.
 - Separate partitions/mount options (`/tmp`, `/var`, `/home` with
   `nodev,nosuid,noexec`) and a GRUB bootloader password are **not**
   automated here — both require install-time/physical-console changes and

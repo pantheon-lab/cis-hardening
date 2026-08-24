@@ -15,6 +15,17 @@
 - Fix: `check_coredump_limits` passed an unexpanded `limits.d/*.conf` glob
   straight to `grep`, which reports an open error (and a false "N/A"/SKIP)
   when no such files exist yet; now iterates existing files explicitly.
+- Fix: `PAM.remember`/`PAM.remember_root`/`PAM.pwhistory_use_authtok` gave up
+  with an unhelpful empty "fix failed" whenever `pam_pwhistory.so` wasn't
+  already present in `/etc/pam.d/common-password` — which is the case on
+  essentially every stock Ubuntu 24.04 install, since Debian/Ubuntu don't
+  ship a `pam-auth-update` profile for it. All three now share
+  `ensure_pwhistory_line`, which inserts the standard
+  `password requisite pam_pwhistory.so remember=5 use_authtok
+  enforce_for_root` line immediately before the `pam_unix.so` password
+  line (order matters: pwhistory must run first) — the same remediation
+  CIS itself documents for this control. Verified against a real
+  Ubuntu-style `common-password` with GNU sed.
 - Fix (Windows): `Section-AccountPolicy`/`Section-LockoutPolicy` call
   `Get-SeceditSettings` before their first `Invoke-Control`, outside any
   try/catch. With `$ErrorActionPreference = 'Stop'`, a missing/blocked
