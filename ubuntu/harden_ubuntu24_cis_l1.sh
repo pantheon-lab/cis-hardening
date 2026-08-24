@@ -733,45 +733,67 @@ check_sshd_kv() {
   val="$(sshd_effective | awk -v k="$key" 'tolower($1)==tolower(k){print $2; found=1} END{if(!found) exit 1}')" || return 1
   [[ "${val,,}" == "${want,,}" ]]
 }
-fix_sshd_kv() { set_kv_space "$SSHD_CONFIG" "$1" "$2"; systemctl reload sshd 2>/dev/null || systemctl reload ssh 2>/dev/null || true; }
+# set_sshd_kv <key> <value> — set a directive in the main sshd_config, and
+# strip any conflicting occurrence from /etc/ssh/sshd_config.d/*.conf
+# drop-ins first. Ubuntu's stock sshd_config does
+# 'Include /etc/ssh/sshd_config.d/*.conf' near the TOP of the file — sshd
+# uses the first occurrence of a directive it encounters, so a value in a
+# drop-in silently wins over anything we append to the bottom of the main
+# file unless we clear it out of the drop-in too.
+set_sshd_kv() {
+  local key="$1" value="$2"
+  local f
+  for f in /etc/ssh/sshd_config.d/*.conf; do
+    [[ -f "$f" ]] || continue
+    grep -Eiq "^[[:space:]]*${key}[[:space:]]" "$f" 2>/dev/null || continue
+    backup_file "$f"
+    sed -i -E "/^[[:space:]]*${key}[[:space:]]/Id" "$f"
+  done
+  set_kv_space "$SSHD_CONFIG" "$key" "$value"
+}
+fix_sshd_kv() { set_sshd_kv "$1" "$2"; systemctl reload sshd 2>/dev/null || systemctl reload ssh 2>/dev/null || true; }
 check_ssh_maxauthtries() {
   local v; v="$(sshd_effective | awk '$1=="maxauthtries"{print $2}')"
   [[ -n "$v" && "$v" -le 4 ]]
 }
-fix_ssh_maxauthtries() { set_kv_space "$SSHD_CONFIG" MaxAuthTries 4; }
+fix_ssh_maxauthtries() { set_sshd_kv MaxAuthTries 4; }
 check_ssh_clientalive() {
   local i c
   i="$(sshd_effective | awk '$1=="clientaliveinterval"{print $2}')"
   c="$(sshd_effective | awk '$1=="clientalivecountmax"{print $2}')"
   [[ -n "$i" && "$i" -gt 0 && "$i" -le 300 && -n "$c" && "$c" -le 3 ]]
 }
-fix_ssh_clientalive() { set_kv_space "$SSHD_CONFIG" ClientAliveInterval 300; set_kv_space "$SSHD_CONFIG" ClientAliveCountMax 3; }
+fix_ssh_clientalive() { set_sshd_kv ClientAliveInterval 300; set_sshd_kv ClientAliveCountMax 3; }
 check_ssh_logingrace() {
   local v; v="$(sshd_effective | awk '$1=="logingracetime"{print $2}')"
   [[ -n "$v" && "$v" -le 60 && "$v" != 0 ]]
 }
-fix_ssh_logingrace() { set_kv_space "$SSHD_CONFIG" LoginGraceTime 60; }
+fix_ssh_logingrace() { set_sshd_kv LoginGraceTime 60; }
 check_ssh_maxsessions() {
   local v; v="$(sshd_effective | awk '$1=="maxsessions"{print $2}')"
   [[ -n "$v" && "$v" -le 10 ]]
 }
-fix_ssh_maxsessions() { set_kv_space "$SSHD_CONFIG" MaxSessions 10; }
+fix_ssh_maxsessions() { set_sshd_kv MaxSessions 10; }
 check_ssh_maxstartups() {
   local v; v="$(sshd_effective | awk '$1=="maxstartups"{print $2}')"
   [[ -n "$v" ]] || return 1
   local first="${v%%:*}"
   [[ "$first" -le 10 ]]
 }
-fix_ssh_maxstartups() { set_kv_space "$SSHD_CONFIG" MaxStartups "10:30:60"; }
+fix_ssh_maxstartups() { set_sshd_kv MaxStartups "10:30:60"; }
 check_ssh_algos() {
-  grep -Eq '^[[:space:]]*Ciphers[[:space:]]' "$SSHD_CONFIG" && \
-  grep -Eq '^[[:space:]]*MACs[[:space:]]' "$SSHD_CONFIG" && \
-  grep -Eq '^[[:space:]]*KexAlgorithms[[:space:]]' "$SSHD_CONFIG"
+  grep -Eq '^[[:space:]]*Ciphers[[:space:]]' "$SSHD_CONFIG" || return 1
+  grep -Eq '^[[:space:]]*MACs[[:space:]]' "$SSHD_CONFIG" || return 1
+  grep -Eq '^[[:space:]]*KexAlgorithms[[:space:]]' "$SSHD_CONFIG" || return 1
+  # CIS explicitly excludes these from the MACs line, even though some
+  # (umac-128-etm) aren't otherwise considered weak — matches the scanner's
+  # own check exactly rather than just "a MACs line exists".
+  ! grep -Eq '^[[:space:]]*MACs[[:space:]].*(hmac-md5|hmac-md5-96|hmac-ripemd160|hmac-sha1-96|umac-64@openssh\.com|hmac-md5-etm@openssh\.com|hmac-md5-96-etm@openssh\.com|hmac-ripemd160-etm@openssh\.com|hmac-sha1-96-etm@openssh\.com|umac-64-etm@openssh\.com|umac-128-etm@openssh\.com)' "$SSHD_CONFIG"
 }
 fix_ssh_algos() {
-  set_kv_space "$SSHD_CONFIG" Ciphers "chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes192-ctr,aes128-ctr"
-  set_kv_space "$SSHD_CONFIG" MACs "hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com,umac-128-etm@openssh.com"
-  set_kv_space "$SSHD_CONFIG" KexAlgorithms "curve25519-sha256,curve25519-sha256@libssh.org,diffie-hellman-group16-sha512,diffie-hellman-group18-sha512"
+  set_sshd_kv Ciphers "chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes128-gcm@openssh.com,aes256-ctr,aes192-ctr,aes128-ctr"
+  set_sshd_kv MACs "hmac-sha2-512-etm@openssh.com,hmac-sha2-256-etm@openssh.com"
+  set_sshd_kv KexAlgorithms "curve25519-sha256,curve25519-sha256@libssh.org,diffie-hellman-group16-sha512,diffie-hellman-group18-sha512"
   systemctl reload sshd 2>/dev/null || systemctl reload ssh 2>/dev/null || true
 }
 
@@ -793,6 +815,24 @@ section_pam() {
   control "PAM.pwhistory_use_authtok" "pam_pwhistory uses use_authtok" check_pwhistory_use_authtok fix_pwhistory_use_authtok
   control "PAM.unix_nullok" "pam_unix does not permit empty passwords (no nullok)" check_pam_unix_nullok fix_pam_unix_nullok
   control "PAM.unix_use_authtok" "pam_unix uses use_authtok" check_pam_unix_use_authtok fix_pam_unix_use_authtok
+  # pam_unix/pam_faillock "module enabled" wiring (CIS 5.3.2.1/5.3.2.2) means
+  # very specific control-syntax brackets across FOUR files (common-account,
+  # common-auth, common-password, common-session). That's normally already
+  # correct on a stock Ubuntu install via pam-auth-update's default
+  # profile — but rewriting it with sed if it's ever NOT exactly right is a
+  # real risk of misconfiguring the whole authentication stack (a wrong
+  # edit here can lock out every account, not just break a password
+  # change). Verified, not auto-rewritten.
+  if check_pam_unix_wiring; then
+    say_pass "PAM.unix_wiring" "pam_unix wired into common-account/-auth/-password/-session with the standard control syntax"
+  else
+    say_skip "PAM.unix_wiring" "pam_unix wiring looks non-standard in one of common-account/-auth/-password/-session (not auto-rewritten — risk of locking out every account, not just breaking a password change); compare against a fresh 'pam-auth-update' baseline"
+  fi
+  if check_pam_faillock_wiring; then
+    say_pass "PAM.faillock_wiring" "pam_faillock wired into common-account/-auth with the standard control syntax"
+  else
+    say_skip "PAM.faillock_wiring" "pam_faillock wiring looks non-standard in common-account/common-auth (not auto-rewritten — same lockout risk); verify via 'pam-auth-update'"
+  fi
 }
 PWQ_CONF="/etc/security/pwquality.conf"
 check_pwquality_pkg() { pkg_installed libpam-pwquality; }
@@ -945,6 +985,19 @@ fix_pam_unix_use_authtok() {
     return 1
   fi
 }
+check_pam_unix_wiring() {
+  grep -Eq '^account[[:space:]]+\[success=1[^]]*\][[:space:]]+pam_unix\.so' /etc/pam.d/common-account 2>/dev/null || return 1
+  grep -Eq '^auth[[:space:]]+\[success=[23][^]]*default=ignore[^]]*\][[:space:]]+pam_unix\.so' /etc/pam.d/common-auth 2>/dev/null || return 1
+  grep -Eq '^password[[:space:]]+\[success=[12][^]]*default=ignore[^]]*\][[:space:]]+pam_unix\.so' /etc/pam.d/common-password 2>/dev/null || return 1
+  grep -Eq '^session[[:space:]]+required[[:space:]]+pam_unix\.so' /etc/pam.d/common-session 2>/dev/null || return 1
+  return 0
+}
+check_pam_faillock_wiring() {
+  grep -Eq '^account[[:space:]]+required[[:space:]]+pam_faillock\.so' /etc/pam.d/common-account 2>/dev/null || return 1
+  grep -Eq '^auth.*\[default=die\].*pam_faillock\.so' /etc/pam.d/common-auth 2>/dev/null || return 1
+  grep -Eq '^auth[[:space:]]+requisite[[:space:]]+pam_faillock\.so' /etc/pam.d/common-auth 2>/dev/null || return 1
+  return 0
+}
 
 # ---------------------------------------------------------------------------
 # 10b. Access to the `su` command
@@ -1079,6 +1132,20 @@ section_file_perms() {
   control "PERM.gshadow" "/etc/gshadow mode 0640 (or stricter), owned root:shadow" "check_perm_max /etc/gshadow 640 root shadow" "fix_perm /etc/gshadow 640 root shadow"
   control "PERM.opasswd" "/etc/security/opasswd mode 0600 (or stricter), owned root:root" \
     "check_perm_max /etc/security/opasswd 600 root root" "fix_perm /etc/security/opasswd 600 root root"
+  # opasswd.old (the previous-rotation backup pam_pwhistory keeps) doesn't
+  # exist until a password has actually been changed once — pre-create it
+  # with the right permissions so the check doesn't just wait around for
+  # that to happen naturally.
+  control "PERM.opasswd_old" "/etc/security/opasswd.old mode 0600 (or stricter), owned root:root" \
+    check_opasswd_old fix_opasswd_old
+}
+check_opasswd_old() {
+  [[ -e /etc/security/opasswd.old ]] || return 1   # missing -> needs creating, not N/A
+  check_perm_max /etc/security/opasswd.old 600 root root
+}
+fix_opasswd_old() {
+  [[ -e /etc/security/opasswd.old ]] || touch /etc/security/opasswd.old
+  fix_perm /etc/security/opasswd.old 600 root root
 }
 check_perm() {
   local f="$1" mode="$2" u="$3" g="$4"

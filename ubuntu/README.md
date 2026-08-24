@@ -29,7 +29,9 @@ cluster:
   (reviewed manually instead of auto-blacklisted) — these back SMB/NFS/CephFS
   PersistentVolumes and FUSE-based CSI drivers or rootless containers.
   Blacklisting one your cluster actually uses doesn't fail loudly; it just
-  makes that filesystem permanently unmountable.
+  makes that filesystem permanently unmountable. **This means CIS 1.1.1.10
+  ("unused filesystems kernel modules") will always show as failed on a
+  container host** too — same intentional tradeoff, not a gap to chase.
 
 Everything else in this script (SSH, PAM, auditd, AppArmor, file
 permissions, audit rules, etc.) is safe to run on a Docker/Kubernetes node
@@ -91,7 +93,7 @@ to run alongside those workloads.
 | | `SSH.maxsessions` | `MaxSessions` ≤ 10 |
 | | `SSH.loglevel` | `LogLevel VERBOSE` |
 | | `SSH.banner` | `Banner /etc/issue.net` |
-| | `SSH.ciphers` | Explicit strong `Ciphers`/`MACs`/`KexAlgorithms` (no weak MACs like `hmac-md5*`/`hmac-sha1-96`/`umac-64*`) |
+| | `SSH.ciphers` | Explicit strong `Ciphers`/`MACs`/`KexAlgorithms` — CIS's excluded-MACs list also rules out `umac-128-etm@openssh.com`, so only the `hmac-sha2-*-etm` MACs are used |
 | | `SSH.access_control` | **Not automated** — informational only, see notes below |
 | PAM | `PAM.pwquality_pkg` | `libpam-pwquality` installed |
 | | `PAM.minlen` | `minlen >= 14` |
@@ -106,6 +108,7 @@ to run alongside those workloads.
 | | `PAM.pwhistory_use_authtok` | `pam_pwhistory` uses `use_authtok` |
 | | `PAM.unix_nullok` | `pam_unix` does not permit empty passwords (no `nullok`) |
 | | `PAM.unix_use_authtok` | `pam_unix` uses `use_authtok` |
+| | `PAM.unix_wiring` / `.faillock_wiring` | `pam_unix`/`pam_faillock` wired into the right files with CIS's exact control syntax — **checked, not auto-rewritten** (see notes) |
 | `su` restriction | `ACL.su_restricted` | `su` restricted to members of the `sudo` group via `pam_wheel` |
 | Accounts | `ACC.maxdays` / `.mindays` / `.warnage` | `PASS_MAX_DAYS<=365`, `PASS_MIN_DAYS>=1`, `PASS_WARN_AGE>=7` in `/etc/login.defs` (new accounts only) |
 | | `ACC.existing_users_aging` | The same limits (`chage --maxdays 365 --mindays 1 --inactive 30`) retroactively applied to existing human accounts (UID 1000–65533 with a real password) — `login.defs` alone only affects accounts created *after* the change |
@@ -113,7 +116,7 @@ to run alongside those workloads.
 | | `ACC.root_umask` | `umask 0027`/`0077` in **both** `/root/.bash_profile` and `/root/.bashrc` |
 | | `ACC.inactive` | New accounts locked ≤30 days after password expiry |
 | | `ACC.tmout` | Idle interactive shells auto-logout (`TMOUT<=900`) |
-| File permissions | `PERM.passwd` / `.shadow` / `.group` / `.gshadow` / `.opasswd` | Ownership and mode on the core account databases |
+| File permissions | `PERM.passwd` / `.shadow` / `.group` / `.gshadow` / `.opasswd` / `.opasswd_old` | Ownership and mode on the core account databases (`opasswd.old` is pre-created if it doesn't exist yet — it's only created naturally after the first password change) |
 | sudo | `SUDO.logfile` | `Defaults logfile=/var/log/sudo.log` configured |
 | | `SUDO.use_pty` | `Defaults use_pty` |
 | Kernel network params | `SYSCTL.*` | IP forwarding (see Docker/K8s note above), IPv6 forwarding, source routing, ICMP redirects, martian logging, broadcast ICMP, bogus ICMP responses, reverse-path filtering, SYN cookies, IPv6 router advertisements |
@@ -206,7 +209,24 @@ to run alongside those workloads.
   CIS scores these as two separate, mutually-exclusive implementations
   (2.3.2.x timesyncd vs 2.3.3.x chrony); running whichever happened to
   already be active by default leaves the other implementation's checks
-  permanently failing.
+  permanently failing. One of the timesyncd checks (2.3.2.2, "systemd-timesyncd
+  is enabled and running") has no "not in use" escape clause the way its
+  sibling 2.3.2.1 does, so **it will always show as failed once chrony is
+  the active implementation** — an unavoidable consequence of choosing one
+  over the other, not a bug.
+- SSH `Ciphers`/`MACs`/`KexAlgorithms` are set on the main `sshd_config`,
+  and any conflicting directive is also stripped out of
+  `/etc/ssh/sshd_config.d/*.conf` first — Ubuntu's stock `sshd_config`
+  does `Include /etc/ssh/sshd_config.d/*.conf` near the top of the file,
+  so a drop-in's value would otherwise silently win over ours (sshd uses
+  the first occurrence of a directive it encounters).
+- `PAM.unix_wiring`/`PAM.faillock_wiring` (verifying `pam_unix`/
+  `pam_faillock` are wired into `common-account`/`-auth`/`-password`/
+  `-session` with the exact control-syntax CIS expects) are **checked but
+  not auto-rewritten** — normally already correct via `pam-auth-update`'s
+  default profile on a stock install, but a sed-based rewrite here risks
+  locking out every account, not just breaking a password change, if
+  anything about the existing syntax is unexpected.
 - Separate partitions/mount options (`/tmp`, `/var`, `/home` with
   `nodev,nosuid,noexec`) and a GRUB bootloader password are **not**
   automated here — both require install-time/physical-console changes and

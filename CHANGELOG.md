@@ -85,3 +85,24 @@
     "other" bits from files under `/var/log`).
   - `SUDO.logfile`'s path is now unquoted in sudoers, avoiding any
     ambiguity with the scanner's literal-path regex.
+- Follow-up round, driven by a re-scan showing the remaining 56 failures
+  (down from 99 — everything else was already the documented tradeoffs:
+  partitions, bootloader password, firewall-on-Kubernetes, `1.1.1.10`'s
+  five storage-backing modules, and `2.3.2.2` vs the chrony/timesyncd
+  choice, both now called out explicitly in the README):
+  - Fixed a real bug: `SSH.ciphers` configured `umac-128-etm@openssh.com`
+    as a "strong" MAC, but CIS's own excluded-MACs list flags it as weak.
+    Removed it; only the `hmac-sha2-*-etm` MACs remain.
+  - Hardened all SSH directive fixes (`set_sshd_kv`) to also strip
+    conflicting occurrences from `/etc/ssh/sshd_config.d/*.conf` first —
+    Ubuntu's stock `sshd_config` includes that directory near the top of
+    the file, so a drop-in's value otherwise silently wins over anything
+    appended to the bottom of the main file (sshd uses the first
+    occurrence it encounters). Verified against a simulated
+    cloud-init-style drop-in conflict.
+  - `PAM.unix_wiring`/`PAM.faillock_wiring` added as verify-only checks
+    (CIS 5.3.2.1/5.3.2.2) — surfaced now instead of being silently
+    untracked, but still not auto-rewritten given the lockout risk.
+  - `PERM.opasswd_old` added — CIS also checks `/etc/security/opasswd.old`,
+    which doesn't exist until the first password change; pre-created with
+    the right permissions instead of waiting on that to happen naturally.
