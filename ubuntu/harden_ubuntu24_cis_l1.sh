@@ -75,18 +75,24 @@ say_skip()       { SKIP_COUNT=$((SKIP_COUNT+1));              printf '  \033[90m
 say_error()      { ERROR_COUNT=$((ERROR_COUNT+1));            printf '  \033[31mERROR\033[0m      %-8s %s\n' "$1" "$2"; log ERROR "$1: $2"; }
 
 # control <id> <description> <check_fn> <fix_fn>
+# check_fn/fix_fn are single strings like "check_sysctl_eq kernel.randomize_va_space 2"
+# — function name plus its arguments — and are deliberately left UNQUOTED below so
+# bash word-splits them into "command arg1 arg2 ..." instead of trying to run the
+# whole string as one literal command name. Every call site in this script passes
+# plain, space-separated tokens (no embedded spaces within a single argument), so
+# this is safe. shellcheck disable=SC2086
 # check_fn should return 0 if already compliant, 1 if not compliant, 2 if not applicable.
 control() {
   local id="$1" desc="$2" check_fn="$3" fix_fn="$4"
   local rc
-  "$check_fn" >/tmp/.cischeck.$$ 2>&1
+  $check_fn >/tmp/.cischeck.$$ 2>&1
   rc=$?
   case "$rc" in
     0) say_pass "$id" "$desc" ;;
     2) say_skip "$id" "$desc ($(cat /tmp/.cischeck.$$))" ;;
     1)
       if [[ "$APPLY" -eq 1 ]]; then
-        if "$fix_fn" >/tmp/.cisfix.$$ 2>&1; then
+        if $fix_fn >/tmp/.cisfix.$$ 2>&1; then
           say_fixed "$id" "$desc"
         else
           say_error "$id" "$desc — fix failed: $(cat /tmp/.cisfix.$$)"
@@ -317,7 +323,15 @@ check_sysctl_eq() {
 }
 fix_sysctl() { set_sysctl "$1" "$2"; }
 check_coredump_limits() {
-  grep -Eq '^\*[[:space:]]+hard[[:space:]]+core[[:space:]]+0' /etc/security/limits.d/*.conf /etc/security/limits.conf 2>/dev/null
+  # Iterate explicitly rather than handing grep an unexpanded glob (which, on
+  # GNU grep, reports an open error — and a false "N/A" — when limits.d/
+  # has no *.conf files yet).
+  local f
+  for f in /etc/security/limits.conf /etc/security/limits.d/*.conf; do
+    [[ -f "$f" ]] || continue
+    grep -Eq '^\*[[:space:]]+hard[[:space:]]+core[[:space:]]+0' "$f" && return 0
+  done
+  return 1
 }
 fix_coredump_limits() {
   local f="/etc/security/limits.d/60-cis-hardening.conf"
