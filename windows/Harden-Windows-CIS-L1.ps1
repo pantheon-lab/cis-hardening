@@ -79,11 +79,11 @@ function Write-CisLog {
     Add-Content -Path $Script:LogFile -Value $line
 }
 
-function Say-Pass      { param($Id,$Desc) $Script:PassCount++;     Write-Host ("  {0,-10} {1,-20} {2}" -f 'PASS','',"$Id  $Desc") -ForegroundColor Green;  Write-CisLog 'PASS' "$Id`: $Desc" }
-function Say-Fixed     { param($Id,$Desc) $Script:FixCount++;      Write-Host ("  {0,-10} {1,-20} {2}" -f 'FIXED','',"$Id  $Desc") -ForegroundColor Cyan;  Write-CisLog 'FIXED' "$Id`: $Desc" }
-function Say-WouldFix  { param($Id,$Desc) $Script:WouldFixCount++; Write-Host ("  {0,-10} {1,-20} {2}" -f 'WOULD FIX','',"$Id  $Desc") -ForegroundColor Yellow; Write-CisLog 'WOULD_FIX' "$Id`: $Desc" }
-function Say-Skip      { param($Id,$Desc) $Script:SkipCount++;     Write-Host ("  {0,-10} {1,-20} {2}" -f 'SKIP','',"$Id  $Desc") -ForegroundColor DarkGray; Write-CisLog 'SKIP' "$Id`: $Desc" }
-function Say-Error     { param($Id,$Desc) $Script:ErrorCount++;    Write-Host ("  {0,-10} {1,-20} {2}" -f 'ERROR','',"$Id  $Desc") -ForegroundColor Red;   Write-CisLog 'ERROR' "$Id`: $Desc" }
+function Say-Pass      { param($Id,$Desc) $Script:PassCount++;     Write-Host ("  {0,-10} {1}" -f 'PASS',"$Id  $Desc") -ForegroundColor Green;  Write-CisLog 'PASS' "$Id`: $Desc" }
+function Say-Fixed     { param($Id,$Desc) $Script:FixCount++;      Write-Host ("  {0,-10} {1}" -f 'FIXED',"$Id  $Desc") -ForegroundColor Cyan;  Write-CisLog 'FIXED' "$Id`: $Desc" }
+function Say-WouldFix  { param($Id,$Desc) $Script:WouldFixCount++; Write-Host ("  {0,-10} {1}" -f 'WOULD FIX',"$Id  $Desc") -ForegroundColor Yellow; Write-CisLog 'WOULD_FIX' "$Id`: $Desc" }
+function Say-Skip      { param($Id,$Desc) $Script:SkipCount++;     Write-Host ("  {0,-10} {1}" -f 'SKIP',"$Id  $Desc") -ForegroundColor DarkGray; Write-CisLog 'SKIP' "$Id`: $Desc" }
+function Say-Error     { param($Id,$Desc) $Script:ErrorCount++;    Write-Host ("  {0,-10} {1}" -f 'ERROR',"$Id  $Desc") -ForegroundColor Red;   Write-CisLog 'ERROR' "$Id`: $Desc" }
 
 # Invoke-Control -Id <id> -Description <desc> -Check {..} -Fix {..}
 # Check scriptblock returns one of: 'Pass', 'Fail', 'Skip'
@@ -669,7 +669,17 @@ $sectionsToRun = if ($Only) { $Only } else { $Script:AllSections }
 foreach ($sec in $sectionsToRun) {
     $fnName = "Section-$sec"
     if (Get-Command $fnName -ErrorAction SilentlyContinue) {
-        & $fnName
+        # A section may do its own setup before its first Invoke-Control call
+        # (e.g. Section-AccountPolicy/-LockoutPolicy call secedit once up
+        # front). That setup isn't wrapped by Invoke-Control's try/catch, so
+        # if a required tool is missing/blocked (secedit, auditpol, ...) on
+        # this particular box, catch it here rather than let one section's
+        # failure abort every section after it.
+        try {
+            & $fnName
+        } catch {
+            Say-Error "$sec.*" "Section failed unexpectedly: $($_.Exception.Message)"
+        }
         Write-Host ""
     } else {
         Write-Warning "Unknown section: $sec (see -ListSections)"

@@ -15,3 +15,12 @@
 - Fix: `check_coredump_limits` passed an unexpanded `limits.d/*.conf` glob
   straight to `grep`, which reports an open error (and a false "N/A"/SKIP)
   when no such files exist yet; now iterates existing files explicitly.
+- Fix (Windows): `Section-AccountPolicy`/`Section-LockoutPolicy` call
+  `Get-SeceditSettings` before their first `Invoke-Control`, outside any
+  try/catch. With `$ErrorActionPreference = 'Stop'`, a missing/blocked
+  `secedit` (or `auditpol`, etc. in other sections) would abort the entire
+  script instead of just that section. The main section-dispatch loop now
+  wraps each `Section-*` call in try/catch, so one section's setup failure
+  reports as an error and the rest of the run still completes. Also
+  removed an unused padded placeholder in the `Say-*` output helpers that
+  was producing extra whitespace in the console output.
