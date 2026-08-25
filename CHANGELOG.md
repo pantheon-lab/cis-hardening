@@ -120,3 +120,20 @@
     *both* that AND a matching file under `/etc/rsyslog.d/*.conf` — same
     shape as the journald.conf.d requirement already handled. Now also
     drops `/etc/rsyslog.d/60-cis-hardening.conf`.
+- Two more real bugs, root-caused from the user pasting actual file
+  contents rather than more scan output — both were bugs in the *check*
+  functions, which is why the corresponding fix never ran even after
+  several `--apply` passes:
+  - `check_ssh_maxstartups` only validated the first number of the
+    `start:rate:full` triple. OpenSSH's own compiled-in default
+    (`10:30:100`, matching Ubuntu's commented-out example line) has
+    `start=10`, which alone satisfies `<=10` — so an entirely
+    unconfigured `MaxStartups` looked compliant, while the real
+    requirement (`full<=60`) didn't hold. Now validates all three fields.
+  - `check_root_umask` ran `grep` directly against `/root/.bash_profile`
+    without checking it exists first. GNU grep exits `2` (not `1`) when
+    the target file is missing, and `control()` treats exit `2` as
+    "not applicable" rather than "needs fixing" — so on a stock Ubuntu
+    box (which doesn't ship `.bash_profile` by default), this control
+    silently skipped itself instead of creating the file. Same class of
+    bug already fixed twice elsewhere in this script, missed here.

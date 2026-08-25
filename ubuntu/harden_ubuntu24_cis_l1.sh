@@ -777,8 +777,16 @@ fix_ssh_maxsessions() { set_sshd_kv MaxSessions 10; }
 check_ssh_maxstartups() {
   local v; v="$(sshd_effective | awk '$1=="maxstartups"{print $2}')"
   [[ -n "$v" ]] || return 1
-  local first="${v%%:*}"
-  [[ "$first" -le 10 ]]
+  # All three colon-separated fields matter (start:rate:full) — checking
+  # only the first meant an unconfigured directive (OpenSSH's own compiled
+  # default is 10:30:100) looked compliant, since 10<=10 alone passes while
+  # the real requirement (full<=60) doesn't.
+  local start="${v%%:*}" rest="${v#*:}"
+  local rate="${rest%%:*}" full="${rest#*:}"
+  [[ "$start" =~ ^[0-9]+$ && "$start" -ge 1 && "$start" -le 10 ]] || return 1
+  [[ "$rate" =~ ^[0-9]+$ && "$rate" -ge 1 && "$rate" -le 30 ]] || return 1
+  [[ "$full" =~ ^[0-9]+$ && "$full" -ge 1 && "$full" -le 60 ]] || return 1
+  return 0
 }
 fix_ssh_maxstartups() { set_sshd_kv MaxStartups "10:30:60"; }
 check_ssh_algos() {
@@ -1058,8 +1066,16 @@ check_root_umask() {
   # Both files are required (Ubuntu doesn't ship /root/.bash_profile by
   # default — bash reads it for login shells, .bashrc for interactive
   # non-login shells; root can hit either depending on how it's invoked).
-  grep -Eq 'umask.*(0027|0077)' /root/.bash_profile 2>/dev/null && \
-  grep -Eq 'umask.*(0027|0077)' /root/.bashrc 2>/dev/null
+  # Check existence explicitly first: grep exits 2 (not 1) on a missing
+  # file, which control() reads as "N/A" rather than "needs fixing" — and
+  # .bash_profile not existing is the common case here, so that silently
+  # skipped this control instead of creating the file.
+  local f
+  for f in /root/.bash_profile /root/.bashrc; do
+    [[ -f "$f" ]] || return 1
+    grep -Eq 'umask.*(0027|0077)' "$f" || return 1
+  done
+  return 0
 }
 fix_root_umask() {
   for f in /root/.bash_profile /root/.bashrc; do
