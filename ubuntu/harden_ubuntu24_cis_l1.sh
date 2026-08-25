@@ -1172,8 +1172,23 @@ section_sudo_logging() {
   control "SUDO.use_pty" "sudo requires a pty (Defaults use_pty)" check_sudo_use_pty fix_sudo_use_pty
 }
 SUDOERS_DROPIN="/etc/sudoers.d/60-cis-hardening"
-check_sudo_logfile() { grep -Rq 'Defaults\s\+logfile=' /etc/sudoers /etc/sudoers.d/ 2>/dev/null; }
+# Require the exact unquoted form so a stale quoted value from an older
+# version of this script (Defaults logfile="/var/log/sudo.log") gets
+# normalized instead of being accepted as-is forever.
+check_sudo_logfile() { grep -REq '^\s*Defaults\s+logfile=/var/log/sudo\.log\s*$' /etc/sudoers /etc/sudoers.d/ 2>/dev/null; }
 fix_sudo_logfile() {
+  # Remove any existing logfile= directive first (main file and any
+  # drop-in) so we don't end up with two conflicting Defaults lines.
+  local f
+  for f in /etc/sudoers /etc/sudoers.d/*; do
+    [[ -f "$f" ]] || continue
+    grep -Eq '^\s*Defaults\s+logfile=' "$f" 2>/dev/null || continue
+    backup_file "$f"
+    sed -i -E '/^\s*Defaults\s+logfile=/d' "$f"
+    if [[ "$f" == "/etc/sudoers" ]]; then
+      visudo -cf /etc/sudoers >/dev/null || log INFO "Warning: /etc/sudoers failed visudo -cf after removing a stale logfile= line — check it manually."
+    fi
+  done
   backup_file "$SUDOERS_DROPIN"
   echo 'Defaults logfile=/var/log/sudo.log' >> "$SUDOERS_DROPIN"
   chmod 440 "$SUDOERS_DROPIN"
@@ -1591,10 +1606,15 @@ fix_journald_rotate() {
   systemctl restart systemd-journald
 }
 RSYSLOG_CONF="/etc/rsyslog.conf"
+RSYSLOG_DROPIN="/etc/rsyslog.d/60-cis-hardening.conf"
 check_rsyslog_filemode() {
   [[ -f "$RSYSLOG_CONF" ]] || return 1
   local v; v="$(grep -Eo '\$FileCreateMode\s+[0-7]{3,4}' "$RSYSLOG_CONF" | tail -1 | awk '{print $2}')"
-  [[ -n "$v" && "$v" -le 640 ]]
+  [[ -n "$v" && "$v" -le 640 ]] || return 1
+  # The scanner requires BOTH rsyslog.conf itself AND at least one file
+  # under rsyslog.d/ to declare this — matching that exactly rather than
+  # just the main file (same shape as the journald.conf.d requirement).
+  grep -Erlq '^\$FileCreateMode\s+(0640|0600|0400)' /etc/rsyslog.d/*.conf 2>/dev/null
 }
 fix_rsyslog_filemode() {
   backup_file "$RSYSLOG_CONF"
@@ -1603,6 +1623,8 @@ fix_rsyslog_filemode() {
   else
     echo '$FileCreateMode 0640' >> "$RSYSLOG_CONF"
   fi
+  backup_file "$RSYSLOG_DROPIN"
+  echo '$FileCreateMode 0640' > "$RSYSLOG_DROPIN"
   systemctl restart rsyslog.service 2>/dev/null || true
 }
 check_journald_persist() { grep -Eq '^\s*Storage=persistent' /etc/systemd/journald.conf 2>/dev/null; }

@@ -106,3 +106,17 @@
   - `PERM.opasswd_old` added — CIS also checks `/etc/security/opasswd.old`,
     which doesn't exist until the first password change; pre-created with
     the right permissions instead of waiting on that to happen naturally.
+- Two more real bugs found from a follow-up scan + the user checking the
+  actual files by hand:
+  - `SUDO.logfile` only checked that *some* `Defaults logfile=` directive
+    existed, so a stale quoted value from before the "remove quotes" fix
+    (`Defaults logfile="/var/log/sudo.log"`) was accepted forever and never
+    got normalized. Tightened to require the exact unquoted form, and
+    `fix_sudo_logfile` now removes any existing `logfile=` line (main
+    `/etc/sudoers` too, validated with `visudo -cf` after) before writing
+    the correct one, instead of just appending and hoping.
+  - `LOG.rsyslog_filemode` (CIS 6.1.3.4) only ever wrote `$FileCreateMode`
+    to `/etc/rsyslog.conf`, but the scanner's `condition: all` requires
+    *both* that AND a matching file under `/etc/rsyslog.d/*.conf` — same
+    shape as the journald.conf.d requirement already handled. Now also
+    drops `/etc/rsyslog.d/60-cis-hardening.conf`.
